@@ -55,7 +55,7 @@ func InitMetrics() {
 			Name:      "volt", // Matches struct field name
 			Help:      "Battery voltage in millivolts.",
 		},
-		[]string{"id"}, // Using "id" to be generic, maps to battery_id
+		[]string{"unit", "id"},
 	)
 
 	batteryCurr = promauto.NewGaugeVec(
@@ -65,7 +65,7 @@ func InitMetrics() {
 			Name:      "curr", // Matches struct field name
 			Help:      "Battery current in milliamps.",
 		},
-		[]string{"id"},
+		[]string{"unit", "id"},
 	)
 
 	batteryTemp = promauto.NewGaugeVec(
@@ -75,7 +75,7 @@ func InitMetrics() {
 			Name:      "temp_celsius", // Clarified unit
 			Help:      "Battery temperature in degrees Celsius. Assumes input is milli-degrees C (e.g., 17000 -> 17.0 C).",
 		},
-		[]string{"id"},
+		[]string{"unit", "id"},
 	)
 
 	batteryBaseState = promauto.NewGaugeVec(
@@ -85,7 +85,7 @@ func InitMetrics() {
 			Name:      "base_state", // Matches struct field name
 			Help:      "Battery base state code (0: Charge, 1: Dischg, 2: Idle, 3: Balance, -1: Unknown).",
 		},
-		[]string{"id"},
+		[]string{"unit", "id"},
 	)
 
 	batterySOC = promauto.NewGaugeVec(
@@ -95,7 +95,7 @@ func InitMetrics() {
 			Name:      "soc", // Matches struct field name
 			Help:      "Battery State of Charge in percent.",
 		},
-		[]string{"id"},
+		[]string{"unit", "id"},
 	)
 
 	batteryCoulomb = promauto.NewGaugeVec(
@@ -105,7 +105,7 @@ func InitMetrics() {
 			Name:      "coulomb", // Matches struct field name
 			Help:      "Battery remaining capacity in milliampere-hours.",
 		},
-		[]string{"id"},
+		[]string{"unit", "id"},
 	)
 
 	batteryBalanceActiveCount = promauto.NewGaugeVec(
@@ -115,7 +115,7 @@ func InitMetrics() {
 			Name:      "bal_active_count",
 			Help:      "Number of active balancing channels. If BAL is 'N' or similar, this will be 0.",
 		},
-		[]string{"id"},
+		[]string{"unit", "id"},
 	)
 
 	// --- Power Supply Metrics Initialization ---
@@ -181,26 +181,27 @@ func InitMetrics() {
 }
 
 // UpdateBatteryMetrics updates Prometheus gauges with the latest battery status.
-func UpdateBatteryMetrics(status parser.BatteryStatus) {
+func UpdateBatteryMetrics(unitLabel string, status parser.BatteryStatus) {
 	idStr := strconv.Itoa(status.ID)
 
-	batteryVolt.WithLabelValues(idStr).Set(float64(status.Volt))
-	batteryCurr.WithLabelValues(idStr).Set(float64(status.Curr))
-	batteryTemp.WithLabelValues(idStr).Set(float64(status.Temp) / 1000.0)
+	// Set each metric, using WithLabelValues to specify the 'unit' and 'id'.
+	batteryVolt.WithLabelValues(unitLabel, idStr).Set(float64(status.Volt))
+	batteryCurr.WithLabelValues(unitLabel, idStr).Set(float64(status.Curr))
+	// Assuming status.Temp is in milli-degrees Celsius, convert to Celsius for the metric.
+	batteryTemp.WithLabelValues(unitLabel, idStr).Set(float64(status.Temp) / 1000.0)
+	batteryBaseState.WithLabelValues(unitLabel, idStr).Set(float64(status.BaseState))
+	batterySOC.WithLabelValues(unitLabel, idStr).Set(float64(status.SOC))
+	batteryCoulomb.WithLabelValues(unitLabel, idStr).Set(float64(status.Coulomb))
 
-	batteryBaseState.WithLabelValues(idStr).Set(float64(status.BaseState))
-	batterySOC.WithLabelValues(idStr).Set(float64(status.SOC))
-	batteryCoulomb.WithLabelValues(idStr).Set(float64(status.Coulomb))
-
-	// Handle BAL field: "Y" means 1 active, "N" means 0, otherwise count "1"s.
+	// Handle the BAL (balancing) field to determine the number of active balancing channels.
 	activeBalanceChannels := 0
 	if status.BAL == "Y" {
-		activeBalanceChannels = 1 // Indicates balancing is active
+		activeBalanceChannels = 1
 	} else if status.BAL != "" && status.BAL != "N" {
 		activeBalanceChannels = strings.Count(status.BAL, "1")
 	}
-	// If status.BAL is "N" or empty, activeBalanceChannels remains 0.
-	batteryBalanceActiveCount.WithLabelValues(idStr).Set(float64(activeBalanceChannels))
+
+	batteryBalanceActiveCount.WithLabelValues(unitLabel, idStr).Set(float64(activeBalanceChannels))
 }
 
 // UpdatePowerMetrics updates Prometheus gauges with the latest power supply status.

@@ -3,6 +3,7 @@ package main
 import (
 	"log"
 	"net/http"
+	"strconv"
 	"time"
 
 	"bat-monitor/src/fetcher"
@@ -49,29 +50,71 @@ func main() {
 
 // processBATData fetches, parses, and updates metrics for BAT command
 func processBATData(pwrUnitCount int8) {
-	batLines, err := fetcher.FetchConsoleOutput("bat")
-	if err != nil {
-		log.Printf("Error fetching BAT data: %v", err)
-		metrics.RecordError("bat_fetch")
+	// Check if there are any power units to process
+	if pwrUnitCount <= 0 {
+		log.Println("No power units specified for BAT data processing (pwrUnitCount <= 0).")
 		return
 	}
 
-	batData, err := parser.ParseBAT(batLines)
-	if err != nil {
-		log.Printf("Error parsing BAT data: %v", err)
-		metrics.RecordError("bat_parse")
-		return
+	totalRecordsProcessedOverall := 0
+	unitsSuccessfullyProcessed := 0
+
+	// Loop through each power unit, from 1 to pwrUnitCount
+	// unitNum is 1-indexed for user-friendliness (Unit 1, Unit 2, ...)
+	for unitNum := int8(1); unitNum <= pwrUnitCount; unitNum++ {
+		var commandToFetch string
+		var unitMetricLabel string // Label for metrics, e.g., "bat0", "bat1"
+
+		if unitNum == 1 {
+			commandToFetch = "bat+1"
+			unitMetricLabel = "bat1"
+		} else {
+			// Subsequent units (Unit 2, Unit 3, ...) use "bat+<index>"
+			// For Unit 2 (unitNum=2), command is "bat+1", label "bat1"
+			// For Unit 3 (unitNum=3), command is "bat+2", label "bat2"
+			suffix := strconv.Itoa(int(unitNum))
+			commandToFetch = "bat+" + suffix
+			unitMetricLabel = "bat" + suffix
+		}
+
+		log.Printf("Fetching BAT data for unit %s (command: %s)...", unitMetricLabel, commandToFetch)
+		batLines, err := fetcher.FetchConsoleOutput(commandToFetch)
+		if err != nil {
+			log.Printf("Error fetching BAT data for unit %s: %v", unitMetricLabel, err)
+			metrics.RecordError("bat_fetch_" + unitMetricLabel)
+			continue
+		}
+
+		log.Printf("Parsing BAT data for unit %s...", unitMetricLabel)
+		batDataForUnit, err := parser.ParseBAT(batLines)
+		if err != nil {
+			log.Printf("Error parsing BAT data for unit %s: %v", unitMetricLabel, err)
+			metrics.RecordError("bat_parse_" + unitMetricLabel)
+			continue
+		}
+
+		if len(batDataForUnit) == 0 {
+			log.Printf("No BAT data parsed for unit %s.", unitMetricLabel)
+		}
+
+		// Update Prometheus metrics for each battery status record from this unit
+		for _, status := range batDataForUnit {
+			metrics.UpdateBatteryMetrics(unitMetricLabel, status)
+		}
+
+		if len(batDataForUnit) > 0 {
+			log.Printf("Successfully processed %d BAT records for unit %s.", len(batDataForUnit), unitMetricLabel)
+		}
+		totalRecordsProcessedOverall += len(batDataForUnit)
+		unitsSuccessfullyProcessed++
 	}
 
-	if len(batData) == 0 {
-		log.Println("No BAT data parsed.")
+	// Final summary log
+	if unitsSuccessfullyProcessed > 0 {
+		log.Printf("Finished processing BAT data for %d unit(s). Total records processed: %d.\n", unitsSuccessfullyProcessed, totalRecordsProcessedOverall)
+	} else if pwrUnitCount > 0 {
+		log.Println("Attempted to process BAT data, but no units were successfully fetched or parsed.")
 	}
-
-	// Update Prometheus metrics for BAT data
-	for _, status := range batData {
-		metrics.UpdateBatteryMetrics(status)
-	}
-	log.Printf("Successfully processed %d BAT records.\n", len(batData))
 }
 
 // processPWRData fetches, parses, and updates metrics for PWR command
