@@ -1,7 +1,11 @@
 # Install
 Create a .env file in the root directory. This file should contain the following variables:  
 ```env
-DEVICE_IP=
+LOG_VERBOSE=false
+DEVICE_IP=DeviceIP
+REFRESH_SECONDS=30
+PORT=9092
+PROM_NAMESPACE=devicemon
 ```
 
 Download the latest release of the exporter and mark it as executable:  
