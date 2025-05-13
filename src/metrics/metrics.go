@@ -2,13 +2,13 @@ package metrics
 
 import (
 	"log"
+	"os"
 	"strconv"
 	"strings"
 
-	"bat-monitor/src/parser" // Assuming parser package is correctly located
+	"pylontech_exporter/src/parser"
 
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
 var (
@@ -33,11 +33,20 @@ var (
 	powerMosTemp   *prometheus.GaugeVec
 )
 
-// InitMetrics initializes all Prometheus metrics.
-func InitMetrics() {
-	namespace := "devicemon" // Namespace for all metrics
+func getNamespace() string {
+	ns := os.Getenv("PROM_NAMESPACE")
+	if ns == "" {
+		ns = "default" // fallback if not set
+	}
+	return ns
+}
 
-	scrapeErrors = promauto.NewCounterVec(
+// InitMetrics initializes all Prometheus metrics and returns a custom registry.
+func InitMetrics() *prometheus.Registry {
+	namespace := getNamespace()
+	reg := prometheus.NewRegistry() // Create a new custom registry
+
+	scrapeErrors = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: namespace,
 			Subsystem: "scraper",
@@ -46,69 +55,76 @@ func InitMetrics() {
 		},
 		[]string{"type"}, // e.g., "bat_fetch", "pwr_parse"
 	)
+	reg.MustRegister(scrapeErrors)
 
 	// --- Battery Metrics Initialization ---
-	batteryVolt = promauto.NewGaugeVec(
+	batteryVolt = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: namespace,
 			Subsystem: "battery",
-			Name:      "volt", // Matches struct field name
+			Name:      "volt",
 			Help:      "Battery voltage in millivolts.",
 		},
 		[]string{"unit", "id"},
 	)
+	reg.MustRegister(batteryVolt)
 
-	batteryCurr = promauto.NewGaugeVec(
+	batteryCurr = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: namespace,
 			Subsystem: "battery",
-			Name:      "curr", // Matches struct field name
+			Name:      "curr",
 			Help:      "Battery current in milliamps.",
 		},
 		[]string{"unit", "id"},
 	)
+	reg.MustRegister(batteryCurr)
 
-	batteryTemp = promauto.NewGaugeVec(
+	batteryTemp = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: namespace,
 			Subsystem: "battery",
-			Name:      "temp_celsius", // Clarified unit
+			Name:      "temp_celsius",
 			Help:      "Battery temperature in degrees Celsius. Assumes input is milli-degrees C (e.g., 17000 -> 17.0 C).",
 		},
 		[]string{"unit", "id"},
 	)
+	reg.MustRegister(batteryTemp)
 
-	batteryBaseState = promauto.NewGaugeVec(
+	batteryBaseState = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: namespace,
 			Subsystem: "battery",
-			Name:      "base_state", // Matches struct field name
+			Name:      "base_state",
 			Help:      "Battery base state code (0: Charge, 1: Dischg, 2: Idle, 3: Balance, -1: Unknown).",
 		},
 		[]string{"unit", "id"},
 	)
+	reg.MustRegister(batteryBaseState)
 
-	batterySOC = promauto.NewGaugeVec(
+	batterySOC = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: namespace,
 			Subsystem: "battery",
-			Name:      "soc", // Matches struct field name
+			Name:      "soc",
 			Help:      "Battery State of Charge in percent.",
 		},
 		[]string{"unit", "id"},
 	)
+	reg.MustRegister(batterySOC)
 
-	batteryCoulomb = promauto.NewGaugeVec(
+	batteryCoulomb = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: namespace,
 			Subsystem: "battery",
-			Name:      "coulomb", // Matches struct field name
+			Name:      "coulomb",
 			Help:      "Battery remaining capacity in milliampere-hours.",
 		},
 		[]string{"unit", "id"},
 	)
+	reg.MustRegister(batteryCoulomb)
 
-	batteryBalanceActiveCount = promauto.NewGaugeVec(
+	batteryBalanceActiveCount = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: namespace,
 			Subsystem: "battery",
@@ -117,90 +133,95 @@ func InitMetrics() {
 		},
 		[]string{"unit", "id"},
 	)
+	reg.MustRegister(batteryBalanceActiveCount)
 
 	// --- Power Supply Metrics Initialization ---
-	powerVolt = promauto.NewGaugeVec(
+	powerVolt = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: namespace,
 			Subsystem: "power",
-			Name:      "volt", // Matches struct field name
+			Name:      "volt",
 			Help:      "Power supply voltage in millivolts.",
 		},
-		[]string{"id"}, // Using "id" to be generic, maps to power_id
+		[]string{"id"},
 	)
+	reg.MustRegister(powerVolt)
 
-	powerCurr = promauto.NewGaugeVec(
+	powerCurr = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: namespace,
 			Subsystem: "power",
-			Name:      "curr", // Matches struct field name
+			Name:      "curr",
 			Help:      "Power supply current in milliamps.",
 		},
 		[]string{"id"},
 	)
+	reg.MustRegister(powerCurr)
 
-	powerBoardTemp = promauto.NewGaugeVec(
+	powerBoardTemp = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: namespace,
 			Subsystem: "power",
-			Name:      "temp_celsius", // Board temperature, clarified unit
+			Name:      "temp_celsius",
 			Help:      "Power supply board temperature in degrees Celsius. Assumes input is milli-degrees C.",
 		},
 		[]string{"id"},
 	)
+	reg.MustRegister(powerBoardTemp)
 
-	powerBaseState = promauto.NewGaugeVec(
+	powerBaseState = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: namespace,
 			Subsystem: "power",
-			Name:      "base_state", // Matches struct field name
+			Name:      "base_state",
 			Help:      "Power supply base state code (e.g., 0: Charge, 1: Dischg, 2: Idle, -1: N/A).",
 		},
 		[]string{"id"},
 	)
+	reg.MustRegister(powerBaseState)
 
-	powerSOC = promauto.NewGaugeVec( // Was 'Coulomb' in PowerStatus struct, but represents SOC %
+	powerSOC = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: namespace,
 			Subsystem: "power",
-			Name:      "soc_percent", // SoC Charge Percentage
+			Name:      "soc_percent",
 			Help:      "Power supply State of Charge or equivalent percentage (from 'Coulomb' field).",
 		},
 		[]string{"id"},
 	)
+	reg.MustRegister(powerSOC)
 
-	powerMosTemp = promauto.NewGaugeVec(
+	powerMosTemp = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: namespace,
 			Subsystem: "power",
-			Name:      "mos_temp_celsius", // milli-degrees C
+			Name:      "mos_temp_celsius",
 			Help:      "Power supply MOS temperature in degrees Celsius. Assumes input is milli-degrees C if numeric.",
 		},
 		[]string{"id"},
 	)
+	reg.MustRegister(powerMosTemp)
+
+	return reg
 }
 
 // UpdateBatteryMetrics updates Prometheus gauges with the latest battery status.
 func UpdateBatteryMetrics(unitLabel string, status parser.BatteryStatus) {
 	idStr := strconv.Itoa(status.ID)
 
-	// Set each metric, using WithLabelValues to specify the 'unit' and 'id'.
 	batteryVolt.WithLabelValues(unitLabel, idStr).Set(float64(status.Volt))
 	batteryCurr.WithLabelValues(unitLabel, idStr).Set(float64(status.Curr))
-	// Assuming status.Temp is in milli-degrees Celsius, convert to Celsius for the metric.
 	batteryTemp.WithLabelValues(unitLabel, idStr).Set(float64(status.Temp) / 1000.0)
 	batteryBaseState.WithLabelValues(unitLabel, idStr).Set(float64(status.BaseState))
 	batterySOC.WithLabelValues(unitLabel, idStr).Set(float64(status.SOC))
 	batteryCoulomb.WithLabelValues(unitLabel, idStr).Set(float64(status.Coulomb))
 
-	// Handle the BAL (balancing) field to determine the number of active balancing channels.
 	activeBalanceChannels := 0
 	if status.BAL == "Y" {
 		activeBalanceChannels = 1
 	} else if status.BAL != "" && status.BAL != "N" {
 		activeBalanceChannels = strings.Count(status.BAL, "1")
 	}
-
 	batteryBalanceActiveCount.WithLabelValues(unitLabel, idStr).Set(float64(activeBalanceChannels))
 }
 
@@ -211,13 +232,11 @@ func UpdatePowerMetrics(status parser.PowerStatus) {
 	powerVolt.WithLabelValues(idStr).Set(float64(status.Volt))
 	powerCurr.WithLabelValues(idStr).Set(float64(status.Curr))
 	powerBoardTemp.WithLabelValues(idStr).Set(float64(status.Temp) / 1000.0)
-
 	powerBaseState.WithLabelValues(idStr).Set(float64(status.BaseState))
-	powerSOC.WithLabelValues(idStr).Set(float64(status.Coulomb)) // Coulomb field in PowerStatus is used as SOC %
+	powerSOC.WithLabelValues(idStr).Set(float64(status.Coulomb))
 
 	if mosTempFloat, err := strconv.ParseFloat(status.MosTemp, 64); err == nil {
-		// Assuming status.MosTemp string represents value in 0.1°C
-		powerMosTemp.WithLabelValues(idStr).Set(mosTempFloat / 10.0) // Corrected from / 1000.0
+		powerMosTemp.WithLabelValues(idStr).Set(mosTempFloat / 10.0)
 	} else {
 		log.Printf("Could not parse MosTemp string '%s' to float for power_id %s: %v", status.MosTemp, idStr, err)
 	}

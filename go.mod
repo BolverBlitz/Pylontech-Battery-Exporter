@@ -1,4 +1,4 @@
-module bat-monitor
+module pylontech_exporter
 
 go 1.23.4
 

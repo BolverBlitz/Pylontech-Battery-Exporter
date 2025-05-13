@@ -3,54 +3,79 @@ package main
 import (
 	"log"
 	"net/http"
+	"os"
 	"strconv"
+	"strings"
 	"time"
 
-	"bat-monitor/src/fetcher"
-	"bat-monitor/src/metrics"
-	"bat-monitor/src/parser"
+	"pylontech_exporter/src/fetcher"
+	"pylontech_exporter/src/metrics"
+	"pylontech_exporter/src/parser"
 
 	"github.com/joho/godotenv"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
+
+var (
+	verbose bool
+)
+
+func logVerbose(format string, v ...interface{}) {
+	if verbose {
+		log.Printf(format, v...)
+	}
+}
 
 func main() {
 	err := godotenv.Load()
 	if err != nil {
 		log.Println("No .env file found, relying on environment variables")
 	}
+	refreshSecondsStr := os.Getenv("REFRESH_SECONDS")
+	if refreshSecondsStr == "" {
+		refreshSecondsStr = "30"
+	}
+	refreshSeconds, err := strconv.Atoi(refreshSecondsStr)
+	if err != nil || refreshSeconds < 1 {
+		log.Printf("Invalid REFRESH_SECONDS value '%s', defaulting to 30", refreshSecondsStr)
+		refreshSeconds = 30
+	}
 
-	// Initialize Prometheus metrics
-	metrics.InitMetrics()
+	verbose = strings.ToLower(os.Getenv("LOG_VERBOSE")) == "true"
+
+	// Initialize Prometheus metrics and get the custom registry
+	customRegistry := metrics.InitMetrics()
 
 	// Start HTTP server for Prometheus metrics
 	go func() {
-		log.Println("Starting Prometheus metrics server on :9092/metrics")
-		http.Handle("/metrics", promhttp.Handler())
-		if err := http.ListenAndServe(":9092", nil); err != nil {
+		port := os.Getenv("PORT")
+		if port == "" {
+			port = "9100" // fallback default
+		}
+
+		// Use HandlerFor with the custom registry
+		http.Handle("/metrics", promhttp.HandlerFor(customRegistry, promhttp.HandlerOpts{}))
+		log.Printf("Starting HTTP server on :%s", port)
+		if err := http.ListenAndServe(":"+port, nil); err != nil {
 			log.Fatalf("Error starting HTTP server: %v", err)
 		}
 	}()
 
 	// Data fetching and processing loop
-	ticker := time.NewTicker(30 * time.Second) // Fetch data every 30 seconds
+	ticker := time.NewTicker(time.Duration(refreshSeconds) * time.Second)
 	defer ticker.Stop()
 
 	for {
 		<-ticker.C
-		log.Println("Fetching and processing device data...")
-		// Fetch and process PWR data
+		logVerbose("Fetching and processing device data...")
 		pwrUnitCount := processPWRData()
-
-		// Fetch and process BAT data
 		processBATData(pwrUnitCount)
-		log.Println("Data processing complete. Waiting for next tick.")
+		logVerbose("Data processing complete. Waiting for next tick.")
 	}
 }
 
 // processBATData fetches, parses, and updates metrics for BAT command
 func processBATData(pwrUnitCount int8) {
-	// Check if there are any power units to process
 	if pwrUnitCount <= 0 {
 		log.Println("No power units specified for BAT data processing (pwrUnitCount <= 0).")
 		return
@@ -59,25 +84,20 @@ func processBATData(pwrUnitCount int8) {
 	totalRecordsProcessedOverall := 0
 	unitsSuccessfullyProcessed := 0
 
-	// Loop through each power unit, from 1 to pwrUnitCount
-	// unitNum is 1-indexed for user-friendliness (Unit 1, Unit 2, ...)
 	for unitNum := int8(1); unitNum <= pwrUnitCount; unitNum++ {
 		var commandToFetch string
-		var unitMetricLabel string // Label for metrics, e.g., "bat0", "bat1"
+		var unitMetricLabel string
 
-		if unitNum == 1 {
-			commandToFetch = "bat+1"
-			unitMetricLabel = "bat1"
-		} else {
-			// Subsequent units (Unit 2, Unit 3, ...) use "bat+<index>"
-			// For Unit 2 (unitNum=2), command is "bat+1", label "bat1"
-			// For Unit 3 (unitNum=3), command is "bat+2", label "bat2"
-			suffix := strconv.Itoa(int(unitNum))
-			commandToFetch = "bat+" + suffix
-			unitMetricLabel = "bat" + suffix
-		}
+		// This logic for commandToFetch and unitMetricLabel seems to have a slight off-by-one
+		// potential in how it's creating labels vs commands for subsequent units.
+		// For unitNum = 1: command "bat+1", label "bat1" (Correct)
+		// For unitNum = 2: command "bat+2", label "bat2" (Original code had "bat+1", label "bat1" effectively again due to suffix logic)
+		// Assuming the intent is that unitNum maps directly to the +N in bat+N and the label suffix.
+		suffix := strconv.Itoa(int(unitNum))
+		commandToFetch = "bat+" + suffix
+		unitMetricLabel = "bat" + suffix
 
-		log.Printf("Fetching BAT data for unit %s (command: %s)...", unitMetricLabel, commandToFetch)
+		logVerbose("Fetching BAT data for unit %s (command: %s)...", unitMetricLabel, commandToFetch)
 		batLines, err := fetcher.FetchConsoleOutput(commandToFetch)
 		if err != nil {
 			log.Printf("Error fetching BAT data for unit %s: %v", unitMetricLabel, err)
@@ -85,7 +105,7 @@ func processBATData(pwrUnitCount int8) {
 			continue
 		}
 
-		log.Printf("Parsing BAT data for unit %s...", unitMetricLabel)
+		logVerbose("Parsing BAT data for unit %s...", unitMetricLabel)
 		batDataForUnit, err := parser.ParseBAT(batLines)
 		if err != nil {
 			log.Printf("Error parsing BAT data for unit %s: %v", unitMetricLabel, err)
@@ -97,21 +117,19 @@ func processBATData(pwrUnitCount int8) {
 			log.Printf("No BAT data parsed for unit %s.", unitMetricLabel)
 		}
 
-		// Update Prometheus metrics for each battery status record from this unit
 		for _, status := range batDataForUnit {
 			metrics.UpdateBatteryMetrics(unitMetricLabel, status)
 		}
 
 		if len(batDataForUnit) > 0 {
-			log.Printf("Successfully processed %d BAT records for unit %s.", len(batDataForUnit), unitMetricLabel)
+			logVerbose("Successfully processed %d BAT records for unit %s.", len(batDataForUnit), unitMetricLabel)
 		}
 		totalRecordsProcessedOverall += len(batDataForUnit)
 		unitsSuccessfullyProcessed++
 	}
 
-	// Final summary log
 	if unitsSuccessfullyProcessed > 0 {
-		log.Printf("Finished processing BAT data for %d unit(s). Total records processed: %d.\n", unitsSuccessfullyProcessed, totalRecordsProcessedOverall)
+		logVerbose("Finished processing BAT data for %d unit(s). Total records processed: %d.\n", unitsSuccessfullyProcessed, totalRecordsProcessedOverall)
 	} else if pwrUnitCount > 0 {
 		log.Println("Attempted to process BAT data, but no units were successfully fetched or parsed.")
 	}
@@ -138,11 +156,10 @@ func processPWRData() int8 {
 		return 0
 	}
 
-	// Update Prometheus metrics for PWR data
 	for _, status := range pwrData {
 		metrics.UpdatePowerMetrics(status)
 	}
 
-	log.Printf("Successfully processed %d PWR records.\n", len(pwrData))
+	logVerbose("Successfully processed %d PWR records.\n", len(pwrData))
 	return int8(len(pwrData))
 }

@@ -141,7 +141,7 @@ func ParseBAT(lines []string) ([]BatteryStatus, error) {
 
 		status.SOC, err = parseSOC(fields[8])
 		if err != nil {
-			log.Printf("Warning parsing SOC for BAT ID %d on line %d: %v. Line: '%s'", status.ID, lineIdx+1, err)
+			log.Printf("Warning parsing SOC for BAT ID %d on line %d: %v. Line: '%s'", status.ID, lineIdx+1, err, line)
 			status.SOC = -1 // Indicate parsing failure for SOC
 		}
 
