@@ -36,7 +36,7 @@ var (
 func getNamespace() string {
 	ns := os.Getenv("PROM_NAMESPACE")
 	if ns == "" {
-		ns = "default" // fallback if not set
+		ns = "devicemon" // fallback if not set
 	}
 	return ns
 }
