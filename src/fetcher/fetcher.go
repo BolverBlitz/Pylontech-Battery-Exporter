@@ -1,10 +1,10 @@
 package fetcher
 
 import (
-	"bufio"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -23,37 +23,57 @@ func FetchConsoleOutput(command string) ([]string, error) {
 		port = "80" // Default HTTP port
 	}
 
-	url := fmt.Sprintf("http://%s:%s/req?code=%s", ip, port, command)
+	requestURL, err := buildRequestURL(ip, port, command)
+	if err != nil {
+		return nil, err
+	}
 
 	// Create an HTTP client with a timeout
 	client := http.Client{
 		Timeout: 15 * time.Second,
 	}
 
-	resp, err := client.Get(url)
+	resp, err := client.Get(requestURL)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get data from %s: %w", url, err)
+		return nil, fmt.Errorf("failed to get data from %s: %w", requestURL, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("received non-200 status code %d from %s", resp.StatusCode, url)
+		return nil, fmt.Errorf("received non-200 status code %d from %s", resp.StatusCode, requestURL)
 	}
 
-	var lines []string
-	reader := bufio.NewReader(resp.Body)
-	for {
-		line, err := reader.ReadString('\n')
-		trimmedLine := strings.TrimSpace(line)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("error reading response body: %w", err)
+	}
+
+	return splitConsoleLines(string(body)), nil
+}
+
+func buildRequestURL(ip, port, command string) (string, error) {
+	baseURL := fmt.Sprintf("http://%s:%s/req", ip, port)
+	parsedURL, err := url.Parse(baseURL)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse base URL %s: %w", baseURL, err)
+	}
+
+	encodedCommand := strings.ReplaceAll(url.QueryEscape(command), "+", "%20")
+	parsedURL.RawQuery = "code=" + encodedCommand
+	return parsedURL.String(), nil
+}
+
+func splitConsoleLines(body string) []string {
+	parts := strings.FieldsFunc(body, func(r rune) bool {
+		return r == '\r' || r == '\n'
+	})
+
+	lines := make([]string, 0, len(parts))
+	for _, part := range parts {
+		trimmedLine := strings.TrimSpace(part)
 		if trimmedLine != "" {
 			lines = append(lines, trimmedLine)
 		}
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return lines, fmt.Errorf("error reading response body: %w", err)
-		}
 	}
-	return lines, nil
+	return lines
 }

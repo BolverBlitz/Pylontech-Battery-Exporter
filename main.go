@@ -64,12 +64,18 @@ func main() {
 	// Data fetching and processing loop
 	ticker := time.NewTicker(time.Duration(refreshSeconds) * time.Second)
 	defer ticker.Stop()
+	lastStatFetch := time.Time{}
 
 	for {
 		<-ticker.C
 		logVerbose("Fetching and processing device data...")
 		pwrUnitCount := processPWRData()
 		processBATData(pwrUnitCount)
+		if lastStatFetch.IsZero() || time.Since(lastStatFetch) >= time.Hour {
+			if processSTATData(pwrUnitCount) {
+				lastStatFetch = time.Now()
+			}
+		}
 		logVerbose("Data processing complete. Waiting for next tick.")
 	}
 }
@@ -88,13 +94,8 @@ func processBATData(pwrUnitCount int8) {
 		var commandToFetch string
 		var unitMetricLabel string
 
-		// This logic for commandToFetch and unitMetricLabel seems to have a slight off-by-one
-		// potential in how it's creating labels vs commands for subsequent units.
-		// For unitNum = 1: command "bat+1", label "bat1" (Correct)
-		// For unitNum = 2: command "bat+2", label "bat2" (Original code had "bat+1", label "bat1" effectively again due to suffix logic)
-		// Assuming the intent is that unitNum maps directly to the +N in bat+N and the label suffix.
 		suffix := strconv.Itoa(int(unitNum))
-		commandToFetch = "bat+" + suffix
+		commandToFetch = "bat " + suffix
 		unitMetricLabel = "bat" + suffix
 
 		logVerbose("Fetching BAT data for unit %s (command: %s)...", unitMetricLabel, commandToFetch)
@@ -133,6 +134,49 @@ func processBATData(pwrUnitCount int8) {
 	} else if pwrUnitCount > 0 {
 		log.Println("Attempted to process BAT data, but no units were successfully fetched or parsed.")
 	}
+}
+
+// processSTATData fetches, parses, and updates slow-changing metrics for stat command.
+func processSTATData(pwrUnitCount int8) bool {
+	if pwrUnitCount <= 0 {
+		log.Println("No power units specified for STAT data processing (pwrUnitCount <= 0).")
+		return false
+	}
+
+	unitsSuccessfullyProcessed := 0
+
+	for unitNum := int8(1); unitNum <= pwrUnitCount; unitNum++ {
+		suffix := strconv.Itoa(int(unitNum))
+		commandToFetch := "stat " + suffix
+		unitMetricLabel := "bat" + suffix
+
+		logVerbose("Fetching STAT data for unit %s (command: %s)...", unitMetricLabel, commandToFetch)
+		statLines, err := fetcher.FetchConsoleOutput(commandToFetch)
+		if err != nil {
+			log.Printf("Error fetching STAT data for unit %s: %v", unitMetricLabel, err)
+			metrics.RecordError("stat_fetch_" + unitMetricLabel)
+			continue
+		}
+
+		logVerbose("Parsing STAT data for unit %s...", unitMetricLabel)
+		statData, err := parser.ParseSTAT(statLines)
+		if err != nil {
+			log.Printf("Error parsing STAT data for unit %s: %v", unitMetricLabel, err)
+			metrics.RecordError("stat_parse_" + unitMetricLabel)
+			continue
+		}
+
+		metrics.UpdateBatteryStatMetrics(unitMetricLabel, statData)
+		unitsSuccessfullyProcessed++
+	}
+
+	if unitsSuccessfullyProcessed > 0 {
+		logVerbose("Finished processing STAT data for %d unit(s).", unitsSuccessfullyProcessed)
+	} else {
+		log.Println("Attempted to process STAT data, but no units were successfully fetched or parsed.")
+	}
+
+	return unitsSuccessfullyProcessed > 0
 }
 
 // processPWRData fetches, parses, and updates metrics for PWR command

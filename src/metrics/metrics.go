@@ -23,6 +23,11 @@ var (
 	batterySOC                *prometheus.GaugeVec
 	batteryCoulomb            *prometheus.GaugeVec
 	batteryBalanceActiveCount *prometheus.GaugeVec
+	batteryStatCycles         *prometheus.GaugeVec
+	batteryStatSOH            *prometheus.GaugeVec
+	batteryStatChgCurrSec     *prometheus.GaugeVec
+	batteryStatDsgCurrSec     *prometheus.GaugeVec
+	batteryStatSocSec         *prometheus.GaugeVec
 
 	// Power Supply Metrics
 	powerVolt      *prometheus.GaugeVec
@@ -135,6 +140,61 @@ func InitMetrics() *prometheus.Registry {
 	)
 	reg.MustRegister(batteryBalanceActiveCount)
 
+	batteryStatCycles = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: namespace,
+			Subsystem: "battery_stat",
+			Name:      "cycles",
+			Help:      "Battery cycle count from stat output.",
+		},
+		[]string{"unit"},
+	)
+	reg.MustRegister(batteryStatCycles)
+
+	batteryStatSOH = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: namespace,
+			Subsystem: "battery_stat",
+			Name:      "soh_percent",
+			Help:      "Battery state of health in percent from stat output.",
+		},
+		[]string{"unit"},
+	)
+	reg.MustRegister(batteryStatSOH)
+
+	batteryStatChgCurrSec = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: namespace,
+			Subsystem: "battery_stat",
+			Name:      "chg_curr_secs",
+			Help:      "Charge current seconds by current range from stat output.",
+		},
+		[]string{"unit", "current_range"},
+	)
+	reg.MustRegister(batteryStatChgCurrSec)
+
+	batteryStatDsgCurrSec = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: namespace,
+			Subsystem: "battery_stat",
+			Name:      "dsg_curr_secs",
+			Help:      "Discharge current seconds by current range from stat output.",
+		},
+		[]string{"unit", "current_range"},
+	)
+	reg.MustRegister(batteryStatDsgCurrSec)
+
+	batteryStatSocSec = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: namespace,
+			Subsystem: "battery_stat",
+			Name:      "soc_secs",
+			Help:      "SOC seconds by SOC range (0-20, 20-60, gt60) from stat output.",
+		},
+		[]string{"unit", "soc_range"},
+	)
+	reg.MustRegister(batteryStatSocSec)
+
 	// --- Power Supply Metrics Initialization ---
 	powerVolt = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
@@ -239,6 +299,28 @@ func UpdatePowerMetrics(status parser.PowerStatus) {
 		powerMosTemp.WithLabelValues(idStr).Set(mosTempFloat / 10.0)
 	} else {
 		log.Printf("Could not parse MosTemp string '%s' to float for power_id %s: %v", status.MosTemp, idStr, err)
+	}
+}
+
+// UpdateBatteryStatMetrics updates Prometheus gauges with parsed stat output.
+func UpdateBatteryStatMetrics(unitLabel string, status parser.BatteryStatStatus) {
+	if status.Cycles >= 0 {
+		batteryStatCycles.WithLabelValues(unitLabel).Set(status.Cycles)
+	}
+	if status.SOH >= 0 {
+		batteryStatSOH.WithLabelValues(unitLabel).Set(status.SOH)
+	}
+
+	for currentRange, value := range status.ChgCurrSec {
+		batteryStatChgCurrSec.WithLabelValues(unitLabel, currentRange).Set(value)
+	}
+
+	for currentRange, value := range status.DsgCurrSec {
+		batteryStatDsgCurrSec.WithLabelValues(unitLabel, currentRange).Set(value)
+	}
+
+	for socRange, value := range status.SocSec {
+		batteryStatSocSec.WithLabelValues(unitLabel, socRange).Set(value)
 	}
 }
 

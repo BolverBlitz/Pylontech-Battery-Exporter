@@ -40,6 +40,15 @@ type PowerStatus struct {
 	MTState   string `json:"mt_state"`
 }
 
+// BatteryStatStatus holds aggregated statistics from the 'stat N' command.
+type BatteryStatStatus struct {
+	Cycles     float64            `json:"cycles"`
+	SOH        float64            `json:"soh"`
+	ChgCurrSec map[string]float64 `json:"chg_curr_sec"`
+	DsgCurrSec map[string]float64 `json:"dsg_curr_sec"`
+	SocSec     map[string]float64 `json:"soc_sec"`
+}
+
 // baseStateMap maps string representations of base states to their int8 values.
 var baseStateMap = map[string]int8{
 	"Charge":  0,
@@ -82,6 +91,98 @@ func parseInt(s string, fieldName string) (int, error) {
 		return 0, fmt.Errorf("failed to parse %s '%s': %w", fieldName, s, err)
 	}
 	return n, nil
+}
+
+func parseFloat(s string, fieldName string) (float64, error) {
+	n, err := strconv.ParseFloat(strings.TrimSpace(s), 64)
+	if err != nil {
+		return 0, fmt.Errorf("failed to parse %s '%s': %w", fieldName, s, err)
+	}
+	return n, nil
+}
+
+func normalizeStatRange(raw string) string {
+	label := strings.ToLower(strings.TrimSpace(raw))
+	label = strings.ReplaceAll(label, " ", "")
+	label = strings.ReplaceAll(label, "~", "-")
+	label = strings.ReplaceAll(label, "to", "-")
+	label = strings.ReplaceAll(label, "_", "-")
+	label = strings.ReplaceAll(label, "%", "")
+
+	switch {
+	case strings.HasSuffix(label, "above"):
+		return "gt" + strings.TrimSuffix(label, "above")
+	case strings.HasPrefix(label, "above"):
+		return "gt" + strings.TrimPrefix(label, "above")
+	case strings.HasSuffix(label, "+"):
+		return "gt" + strings.TrimSuffix(label, "+")
+	default:
+		return strings.Trim(label, "-:")
+	}
+}
+
+// ParseSTAT parses the raw lines from a 'stat N' command output.
+func ParseSTAT(lines []string) (BatteryStatStatus, error) {
+	result := BatteryStatStatus{
+		Cycles:     -1,
+		SOH:        -1,
+		ChgCurrSec: map[string]float64{},
+		DsgCurrSec: map[string]float64{},
+		SocSec:     map[string]float64{},
+	}
+
+	valueLineRegex := regexp.MustCompile(`^(.+?)\s*:\s*(-?\d+(?:\.\d+)?)\s*$`)
+	chgCurrRegex := regexp.MustCompile(`(?i)^ChgCurr\s+(.+?)\s+Secs?$`)
+	dsgCurrRegex := regexp.MustCompile(`(?i)^DsgCurr\s+(.+?)\s+Secs?$`)
+	socRegex := regexp.MustCompile(`(?i)^Soc\s+(.+?)\s+Secs?$`)
+
+	for _, rawLine := range lines {
+		line := strings.TrimSpace(rawLine)
+		if line == "" {
+			continue
+		}
+
+		m := valueLineRegex.FindStringSubmatch(line)
+		if len(m) != 3 {
+			continue
+		}
+
+		label := strings.TrimSpace(m[1])
+		value, err := parseFloat(m[2], "STAT value")
+		if err != nil {
+			continue
+		}
+
+		switch strings.ToLower(strings.Join(strings.Fields(label), " ")) {
+		case "cycle times", "cycles":
+			result.Cycles = value
+		case "soh":
+			result.SOH = value
+		}
+
+		if m := chgCurrRegex.FindStringSubmatch(label); len(m) == 2 {
+			result.ChgCurrSec[normalizeStatRange(m[1])] = value
+			continue
+		}
+
+		if m := dsgCurrRegex.FindStringSubmatch(label); len(m) == 2 {
+			result.DsgCurrSec[normalizeStatRange(m[1])] = value
+			continue
+		}
+
+		if m := socRegex.FindStringSubmatch(label); len(m) == 2 {
+			rangeLabel := normalizeStatRange(m[1])
+			if rangeLabel == "0-20" || rangeLabel == "20-60" || rangeLabel == "gt60" {
+				result.SocSec[rangeLabel] = value
+			}
+		}
+	}
+
+	if result.Cycles < 0 && result.SOH < 0 && len(result.ChgCurrSec) == 0 && len(result.DsgCurrSec) == 0 && len(result.SocSec) == 0 {
+		return result, fmt.Errorf("no STAT values could be parsed")
+	}
+
+	return result, nil
 }
 
 // ParseBAT parses the raw lines from the 'bat' command output.
@@ -148,7 +249,7 @@ func ParseBAT(lines []string) ([]BatteryStatus, error) {
 		// Coulomb parsing: fields[9] is value, fields[10] is unit "mAH"
 		status.Coulomb, err = parseCoulomb(fields[9], fields[10])
 		if err != nil {
-			log.Printf("Warning parsing Coulomb for BAT ID %d on line %d: %v. Line: '%s'", status.ID, lineIdx+1, err)
+			log.Printf("Warning parsing Coulomb for BAT ID %d on line %d: %v. Line: '%s'", status.ID, lineIdx+1, err, line)
 			status.Coulomb = -1 // Indicate parsing failure
 		}
 
@@ -230,7 +331,7 @@ func ParsePWR(lines []string) ([]PowerStatus, error) {
 
 		socVal, err := parseSOC(fields[12]) // SOC is field 12
 		if err != nil {
-			log.Printf("Warning parsing SOC/Coulomb for PWR ID %d on line %d: %v. Line: '%s'", status.ID, lineIdx+1, err)
+			log.Printf("Warning parsing SOC/Coulomb for PWR ID %d on line %d: %v. Line: '%s'", status.ID, lineIdx+1, err, line)
 			status.Coulomb = -1 // Indicate parsing failure
 		} else {
 			status.Coulomb = socVal // Storing SOC (as int8) into Coulomb field as per struct def
