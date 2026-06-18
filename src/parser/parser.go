@@ -44,6 +44,7 @@ type PowerStatus struct {
 type BatteryStatStatus struct {
 	Cycles     float64            `json:"cycles"`
 	SOH        float64            `json:"soh"`
+	DsgCap     float64            `json:"dsg_cap"`
 	ChgCurrSec map[string]float64 `json:"chg_curr_sec"`
 	DsgCurrSec map[string]float64 `json:"dsg_curr_sec"`
 	SocSec     map[string]float64 `json:"soc_sec"`
@@ -126,6 +127,7 @@ func ParseSTAT(lines []string) (BatteryStatStatus, error) {
 	result := BatteryStatStatus{
 		Cycles:     -1,
 		SOH:        -1,
+		DsgCap:     -1,
 		ChgCurrSec: map[string]float64{},
 		DsgCurrSec: map[string]float64{},
 		SocSec:     map[string]float64{},
@@ -158,6 +160,8 @@ func ParseSTAT(lines []string) (BatteryStatStatus, error) {
 			result.Cycles = value
 		case "soh":
 			result.SOH = value
+		case "dsg cap":
+			result.DsgCap = value
 		}
 
 		if m := chgCurrRegex.FindStringSubmatch(label); len(m) == 2 {

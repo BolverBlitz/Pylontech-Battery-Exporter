@@ -25,6 +25,7 @@ var (
 	batteryBalanceActiveCount *prometheus.GaugeVec
 	batteryStatCycles         *prometheus.GaugeVec
 	batteryStatSOH            *prometheus.GaugeVec
+	batteryStatDsgCap         *prometheus.GaugeVec
 	batteryStatChgCurrSec     *prometheus.GaugeVec
 	batteryStatDsgCurrSec     *prometheus.GaugeVec
 	batteryStatSocSec         *prometheus.GaugeVec
@@ -161,6 +162,17 @@ func InitMetrics() *prometheus.Registry {
 		[]string{"unit"},
 	)
 	reg.MustRegister(batteryStatSOH)
+
+	batteryStatDsgCap = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: namespace,
+			Subsystem: "battery_stat",
+			Name:      "dsg_cap",
+			Help:      "Cumulative discharge capacity from stat output, in the device's reported units.",
+		},
+		[]string{"unit"},
+	)
+	reg.MustRegister(batteryStatDsgCap)
 
 	batteryStatChgCurrSec = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
@@ -309,6 +321,9 @@ func UpdateBatteryStatMetrics(unitLabel string, status parser.BatteryStatStatus)
 	}
 	if status.SOH >= 0 {
 		batteryStatSOH.WithLabelValues(unitLabel).Set(status.SOH)
+	}
+	if status.DsgCap >= 0 {
+		batteryStatDsgCap.WithLabelValues(unitLabel).Set(status.DsgCap)
 	}
 
 	for currentRange, value := range status.ChgCurrSec {

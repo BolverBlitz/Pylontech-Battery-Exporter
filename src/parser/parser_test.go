@@ -10,6 +10,7 @@ func TestParseSTATFirmwareLabelValueOutput(t *testing.T) {
 		"SOH Times       :      282",
 		"CYCLE Times     :      123",
 		"SOH             :       99",
+		"Dsg Cap         :  6621177",
 		"ChgCurr 0~0.2C Secs      :   580588",
 		"ChgCurr 0.2C~0.5C Secs   :   161292",
 		"ChgCurr 0.5C~0.8C Secs   :      234",
@@ -36,6 +37,9 @@ func TestParseSTATFirmwareLabelValueOutput(t *testing.T) {
 	}
 	if got.SOH != 99 {
 		t.Fatalf("SOH = %v, want 99", got.SOH)
+	}
+	if got.DsgCap != 6621177 {
+		t.Fatalf("DsgCap = %v, want 6621177", got.DsgCap)
 	}
 
 	wantChg := map[string]float64{
