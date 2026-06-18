@@ -64,6 +64,54 @@ func TestParseSTATFirmwareLabelValueOutput(t *testing.T) {
 	assertFloatMap(t, "SocSec", got.SocSec, wantSoc)
 }
 
+func TestParsePWRCurrentColumnLayout(t *testing.T) {
+	lines := []string{
+		"pwr",
+		"@",
+		"Power Volt   Curr   Tempr  Tlow   Tlow.Id  Thigh  Thigh.Id Vlow   Vlow.Id  Vhigh  Vhigh.Id Base.St  Volt.St  Curr.St  Temp.St  Coulomb  Time                 B.V.St   B.T.St  MosTempr M.T.St   SysAlarm.St",
+		"1     51516  -1459  32900  29400  12       31300  0        3429   2        3438   1        Dischg   Normal   Normal   Normal   100%     2026-06-18 22:49:12  Normal   Normal  32400    Normal   Normal",
+		"4     -      -      -      -      -        -      -        Absent",
+	}
+
+	got, err := ParsePWR(lines)
+	if err != nil {
+		t.Fatalf("ParsePWR returned error: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("len(ParsePWR) = %d, want 1: %#v", len(got), got)
+	}
+
+	status := got[0]
+	if status.ID != 1 || status.BaseState != 1 || status.Coulomb != 100 {
+		t.Fatalf("parsed identity/state/SOC incorrectly: %#v", status)
+	}
+	if status.VoltState != "Normal" || status.CurrState != "Normal" || status.TempState != "Normal" {
+		t.Fatalf("parsed state columns incorrectly: %#v", status)
+	}
+	if status.BVState != "Normal" || status.BTState != "Normal" || status.MosTemp != "32400" || status.MTState != "Normal" {
+		t.Fatalf("parsed trailing columns incorrectly: %#v", status)
+	}
+}
+
+func TestParsePWRLegacyColumnLayoutWithoutHeader(t *testing.T) {
+	lines := []string{
+		"1 51516 -1459 32900 0 0 0 0 Dischg Normal Normal Normal 100% 2026-06-18 22:49:12 Normal Normal 32400 Normal",
+	}
+
+	got, err := ParsePWR(lines)
+	if err != nil {
+		t.Fatalf("ParsePWR returned error: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("len(ParsePWR) = %d, want 1: %#v", len(got), got)
+	}
+
+	status := got[0]
+	if status.BaseState != 1 || status.Coulomb != 100 || status.MosTemp != "32400" {
+		t.Fatalf("legacy layout parsed incorrectly: %#v", status)
+	}
+}
+
 func assertFloatMap(t *testing.T, name string, got, want map[string]float64) {
 	t.Helper()
 

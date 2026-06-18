@@ -275,15 +275,117 @@ func ParseBAT(lines []string) ([]BatteryStatus, error) {
 	return results, nil
 }
 
+type pwrLayout struct {
+	baseState int
+	voltState int
+	currState int
+	tempState int
+	soc       int
+	bvState   int
+	btState   int
+	mosTemp   int
+	mtState   int
+}
+
+var legacyPWRLayout = pwrLayout{
+	baseState: 8,
+	voltState: 9,
+	currState: 10,
+	tempState: 11,
+	soc:       12,
+	bvState:   15,
+	btState:   16,
+	mosTemp:   17,
+	mtState:   18,
+}
+
+// parsePWRHeader derives data-field positions from the column headings. The
+// displayed Time column occupies two whitespace-separated fields in data rows.
+func parsePWRHeader(line string) (pwrLayout, bool) {
+	var layout pwrLayout
+	found := make(map[string]bool)
+	dataIdx := 0
+
+	for _, heading := range strings.Fields(line) {
+		switch heading {
+		case "Base.St":
+			layout.baseState = dataIdx
+			found[heading] = true
+		case "Volt.St":
+			layout.voltState = dataIdx
+			found[heading] = true
+		case "Curr.St":
+			layout.currState = dataIdx
+			found[heading] = true
+		case "Temp.St":
+			layout.tempState = dataIdx
+			found[heading] = true
+		case "Coulomb":
+			layout.soc = dataIdx
+			found[heading] = true
+		case "B.V.St":
+			layout.bvState = dataIdx
+			found[heading] = true
+		case "B.T.St":
+			layout.btState = dataIdx
+			found[heading] = true
+		case "MosTempr", "MosTemp":
+			layout.mosTemp = dataIdx
+			found["MosTemp"] = true
+		case "M.T.St":
+			layout.mtState = dataIdx
+			found[heading] = true
+		}
+
+		if heading == "Time" {
+			dataIdx += 2
+		} else {
+			dataIdx++
+		}
+	}
+
+	required := []string{"Base.St", "Volt.St", "Curr.St", "Temp.St", "Coulomb", "B.V.St", "B.T.St", "MosTemp", "M.T.St"}
+	for _, heading := range required {
+		if !found[heading] {
+			return pwrLayout{}, false
+		}
+	}
+	return layout, true
+}
+
+func (layout pwrLayout) requiredFields() int {
+	maxIdx := layout.baseState
+	for _, idx := range []int{
+		layout.voltState,
+		layout.currState,
+		layout.tempState,
+		layout.soc,
+		layout.bvState,
+		layout.btState,
+		layout.mosTemp,
+		layout.mtState,
+	} {
+		if idx > maxIdx {
+			maxIdx = idx
+		}
+	}
+	return maxIdx + 1
+}
+
 // ParsePWR parses the raw lines from the 'pwr' command output.
 func ParsePWR(lines []string) ([]PowerStatus, error) {
 	var results []PowerStatus
+	layout := legacyPWRLayout
 	// Regex for data lines, e.g., "0  5000   0    250  ..."
 	// Based on field access, it seems to expect a line that can be split into many fields.
 	dataRegex := regexp.MustCompile(`^\s*\d+\s+`) // Matches lines starting with a number (ID)
 
 	for lineIdx, line := range lines { // Added lineIdx for logging
 		line = strings.TrimSpace(line)
+		if headerLayout, ok := parsePWRHeader(line); ok {
+			layout = headerLayout
+			continue
+		}
 		// Skip lines explicitly containing "Absent" or if they don't look like data lines or are empty.
 		if !dataRegex.MatchString(line) || strings.Contains(line, "Absent") || line == "" {
 			// log.Printf("Skipping non-data, 'Absent', or empty line (PWR): '%s'", line)
@@ -291,9 +393,9 @@ func ParsePWR(lines []string) ([]PowerStatus, error) {
 		}
 
 		fields := strings.Fields(line)
-		// Expected fields based on indices used: ID(0), Volt(1), Curr(2), Temp(3), ..., BaseState(8), VoltState(9), CurrState(10), TempState(11), SOC/Coulomb(12), Time_p1(13), Time_p2(14), BVState(15), BTState(16), MosTemp(17), MTState(18)
-		if len(fields) < 19 {
-			log.Printf("Skipping line %d (PWR) due to insufficient fields (got %d, expected at least 19): '%s'", lineIdx+1, len(fields), line)
+		requiredFields := layout.requiredFields()
+		if len(fields) < requiredFields {
+			log.Printf("Skipping line %d (PWR) due to insufficient fields (got %d, expected at least %d): '%s'", lineIdx+1, len(fields), requiredFields, line)
 			continue
 		}
 
@@ -324,12 +426,12 @@ func ParsePWR(lines []string) ([]PowerStatus, error) {
 			continue
 		}
 
-		status.BaseState = parseBaseState(fields[8]) // BaseState is field 8
-		status.VoltState = fields[9]
-		status.CurrState = fields[10]
-		status.TempState = fields[11] // State for board temperature
+		status.BaseState = parseBaseState(fields[layout.baseState])
+		status.VoltState = fields[layout.voltState]
+		status.CurrState = fields[layout.currState]
+		status.TempState = fields[layout.tempState] // State for board temperature
 
-		socVal, err := parseSOC(fields[12]) // SOC is field 12
+		socVal, err := parseSOC(fields[layout.soc])
 		if err != nil {
 			log.Printf("Warning parsing SOC/Coulomb for PWR ID %d on line %d: %v. Line: '%s'", status.ID, lineIdx+1, err, line)
 			status.Coulomb = -1 // Indicate parsing failure
@@ -337,13 +439,13 @@ func ParsePWR(lines []string) ([]PowerStatus, error) {
 			status.Coulomb = socVal // Storing SOC (as int8) into Coulomb field as per struct def
 		}
 
-		status.BVState = fields[15]
-		status.BTState = fields[16]
+		status.BVState = fields[layout.bvState]
+		status.BTState = fields[layout.btState]
 
-		status.MosTemp = fields[17] // MosTemp is field 17 (string, in 0.1C)
+		status.MosTemp = fields[layout.mosTemp] // MosTemp is a string in 0.1C
 		// No direct parsing to int here, kept as string. Conversion happens in metrics.go
 
-		status.MTState = fields[18]
+		status.MTState = fields[layout.mtState]
 
 		results = append(results, status)
 	}
